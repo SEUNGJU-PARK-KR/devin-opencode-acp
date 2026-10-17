@@ -71,6 +71,19 @@ In `settings.json`:
 
 The change is picked up live; no restart needed. Then select **OpenCode** in the agent selector (bottom-right) for new conversations.
 
+## Auto-approve all permissions
+
+Devin surfaces opencode's permission asks as "allow once / allow always" dialogs. To skip them entirely, set the wildcard rule in `%USERPROFILE%\.config\opencode\opencode.jsonc`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": { "*": "allow" }
+}
+```
+
+`"permission"` also accepts the shorthand `"allow"`. Respawn the agent (toggle it off/on in `enabledAgents`) to reload the config.
+
 ## The `%5C` bug (why the proxy exists)
 
 Devin Desktop sends file context as `resource_link` content blocks with URIs like
