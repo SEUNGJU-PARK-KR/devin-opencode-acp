@@ -1,6 +1,6 @@
 ---
 name: devin-opencode-acp
-description: "Connect OpenCode to Devin Desktop as an external ACP agent on Windows, and fix the 'Internal error: OpenCode service failure' that breaks prompts carrying file context (Devin emits file:///C%3A%5C... URIs that crash opencode's fileURLToPath). Ships a Go stdio proxy (proxy/main.go) that rewrites encoded separators in file:// URIs on the inbound ACP stream. Use when wiring opencode into Devin's Agent Command Center, debugging ACP spawn/PATH errors, or fixing file-attachment prompts that fail only under ACP."
+description: "Connect OpenCode and Tencent CodeBuddy Code to Devin Desktop as external ACP agents on Windows, and fix the file-context failures both hit on Devin's file:///C%3A%5C... URIs (opencode crashes in fileURLToPath; CodeBuddy reduces the URI to a basename and Read fails with 'File does not exist'). Ships a Go stdio proxy for opencode (proxy/main.go), a bin/codebuddy wrapper patch (codebuddy/bin-wrapper.js), and a standalone CodeBuddy proxy (proxy-codebuddy/main.go). Use when wiring either agent into Devin's Agent Command Center, debugging ACP spawn/PATH errors, or fixing file-attachment prompts that fail only under ACP."
 ---
 
 # devin-opencode-acp
@@ -115,3 +115,85 @@ Logs live under `%APPDATA%\Devin\logs\<timestamp>\window1\exthost\`:
 
 Quick repro harness: send `initialize` → `session/new` → `session/prompt` with a
 `resource_link` block over stdin to `opencode.exe acp` (newline-delimited JSON-RPC).
+
+---
+
+# CodeBuddy Code (WorkBuddy) in Devin
+
+Tencent **CodeBuddy Code** (`workbuddy.ai`) is already in Devin's bundled ACP registry as
+agent id `codebuddy-code` — **no local registry entry is needed**. Devin spawns:
+
+```
+npx -y @tencent-ai/codebuddy-code@2.168.2 --acp
+```
+
+## Setup
+
+```powershell
+npm install -g "@tencent-ai/codebuddy-code@<version>"
+```
+
+then set `"devin.acp.enabledAgents": { "codebuddy-code": true }` in Devin's
+`settings.json` (picked up live), or toggle **Codebuddy Code** in User Settings → Agents.
+Or run `scripts/install-codebuddy.ps1` which does the install + patch + enable.
+
+Authenticate via the thread menu → `external` (Google/GitHub login, international) —
+`internal` is WeChat/China, `iOA`/`selfhosted` are enterprise. Auth state lives in
+`%USERPROFILE%\.codebuddy` and is shared by every spawned process.
+
+## The same `%5C` bug, different symptom
+
+Devin sends attachments as `resource_link` blocks with
+`file:///C%3A%5Cdir%5Cfile.ts`. CodeBuddy does not crash — it **collapses the URI to
+its basename**, so the model calls `Read` on `file.ts` relative to the cwd and gets
+`<tool_use_error>File does not exist.</tool_use_error>`. Plain prompts still work;
+file-context prompts silently read the wrong path or nothing.
+
+Verified on `2.168.2`: encoded URI → `Read go.work` → "File does not exist"; the same
+URI sanitized to `file:///C:/dir/file.ts` → correct full-path `Read` → `end_turn`.
+
+## Fix option A — patch `bin/codebuddy` (no restart, recommended)
+
+When codebuddy-code is installed globally, `npx -y @tencent-ai/codebuddy-code@<ver>`
+resolves the bin in `%APPDATA%\npm\node_modules\@tencent-ai\codebuddy-code\bin` — the
+very file Devin ends up running. `codebuddy/bin-wrapper.js` is a drop-in replacement
+for `bin/codebuddy`:
+
+1. `rename bin/codebuddy -> bin/codebuddy-orig`
+2. copy `codebuddy/bin-wrapper.js` → `bin/codebuddy`
+
+In `--acp` mode it spawns `node codebuddy-orig --acp` and sanitizes `file://` URIs on
+stdin (same `%5C`/`%2F`/`%3A` decode); every other mode loads `codebuddy-orig`
+in-process, so the TUI is unaffected. Toggle the agent off/on to pick it up — no Devin
+restart needed.
+
+**Caveat:** `npm update -g` / reinstall of the package overwrites the wrapper — re-run
+`scripts/install-codebuddy.ps1` after upgrading.
+
+## Fix option B — standalone proxy agent (`proxy-codebuddy/`)
+
+Same approach as the opencode proxy: build `proxy-codebuddy/main.go` →
+`codebuddy-acp-proxy.exe` on PATH, and add a **new** agent id (e.g. `codebuddy-proxy`)
+to the local registry with `cmd: "codebuddy-acp-proxy.exe"`, `args: ["--acp"]`.
+It launches `node <npm root>\node_modules\@tencent-ai\codebuddy-code\bin\codebuddy`
+itself (overridable via `CODEBUDDY_ENTRY`/`CODEBUDDY_NODE`; debug log via
+`CODEBUDDY_PROXY_LOG`).
+
+### Registry caveats learned the hard way
+
+- A local-registry entry **cannot override a bundled agent id** — Devin keeps spawning
+  `npx -y @tencent-ai/codebuddy-code@...` even if `id: "codebuddy-code"` exists locally.
+  Use a distinct id.
+- The local registry is read **once at window startup** — after adding an agent, reload
+  the window (`Ctrl+Shift+P` → Reload Window) for it to appear. `enabledAgents` toggles
+  are live; registry additions are not.
+
+## CodeBuddy logs
+
+- `%USERPROFILE%\.codebuddy\logs\<date>\<workspace>__<hash>.log` — session log
+- `Failed to read settings file for scope user: ENOENT` and missing
+  `product.external.json` warnings are **non-fatal** — remote config falls back to
+  `https://www.codebuddy.ai/v3/config`.
+- ACP-level auth check: `authenticate` with method `external` returns the logged-in
+  user info when credentials already exist.
+
