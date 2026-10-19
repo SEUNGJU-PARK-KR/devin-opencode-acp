@@ -9,20 +9,34 @@ $ErrorActionPreference = 'Stop'
 Write-Host "==> Installing @tencent-ai/codebuddy-code@$Version"
 npm install -g "@tencent-ai/codebuddy-code@$Version"
 
-$npmRoot = (npm root -g).Trim()
-$binDir  = Join-Path $npmRoot "@tencent-ai\codebuddy-code\bin"
-$binFile = Join-Path $binDir "codebuddy"
-$origFile = Join-Path $binDir "codebuddy-orig"
+$wrapper = Join-Path $PSScriptRoot "..\codebuddy\bin-wrapper.js"
 
-if (-not (Test-Path $origFile)) {
-    Write-Host "==> Backing up bin\codebuddy -> codebuddy-orig"
-    Copy-Item $binFile $origFile
-} else {
-    Write-Host "==> codebuddy-orig already exists, keeping it"
+# Devin launches `npx -y @tencent-ai/codebuddy-code@<ver> --acp`. npx resolves
+# either the global install or a _npx cache copy — patch BOTH locations so the
+# wrapper is in effect regardless of which one npx picks.
+$patchTargets = @()
+$npmRoot = (npm root -g).Trim()
+$patchTargets += (Join-Path $npmRoot "@tencent-ai\codebuddy-code\bin")
+
+$npxCache = Join-Path $env:LOCALAPPDATA "npm-cache\_npx"
+if (Test-Path $npxCache) {
+    Get-ChildItem $npxCache -Directory | ForEach-Object {
+        $b = Join-Path $_.FullName "node_modules\@tencent-ai\codebuddy-code\bin"
+        if (Test-Path (Join-Path $b "codebuddy")) { $patchTargets += $b }
+    }
 }
 
-Write-Host "==> Writing URI-fix wrapper to bin\codebuddy"
-Copy-Item (Join-Path $PSScriptRoot "..\codebuddy\bin-wrapper.js") $binFile -Force
+foreach ($binDir in $patchTargets) {
+    $binFile  = Join-Path $binDir "codebuddy"
+    $origFile = Join-Path $binDir "codebuddy-orig"
+    if (-not (Test-Path $binFile)) { continue }
+    if (-not (Test-Path $origFile)) {
+        Write-Host "==> Backing up $binFile -> codebuddy-orig"
+        Copy-Item $binFile $origFile
+    }
+    Write-Host "==> Writing URI-fix wrapper to $binFile"
+    Copy-Item $wrapper $binFile -Force
+}
 
 # Enable the built-in agent in Devin settings.
 $settings = "$env:APPDATA\Devin\User\settings.json"
