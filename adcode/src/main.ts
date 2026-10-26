@@ -33,7 +33,14 @@ interface Session {
   ctx?: AgentContext;
   allowAlways: Set<string>;
   toolNames: Map<string, string>;
+  /** "ask" = permission prompts on mutating tools; "bypass" = run immediately. */
+  mode: "ask" | "bypass";
 }
+
+const AVAILABLE_MODES = [
+  { id: "ask", name: "Ask permissions", description: "Edit/command tools ask before running" },
+  { id: "bypass", name: "Bypass permissions", description: "Tools run without asking" },
+];
 
 const sessions = new Map<string, Session>();
 let nextId = 0;
@@ -87,6 +94,7 @@ const newSession = (cwd: string, id: string): Session => {
     id,
     allowAlways: new Set(),
     toolNames: new Map(),
+    mode: "ask",
   };
   runner.onPermission = (call) => askPermission(session, call);
   runner.onAsk = (input) => askUser(session, input);
@@ -101,7 +109,9 @@ const describeCall = (call: ToolCallBlock): string => {
 };
 
 async function askPermission(session: Session, call: ToolCallBlock): Promise<boolean> {
-  if (session.allowAlways.has(call.name) || session.ctx === undefined) return true;
+  if (session.mode === "bypass" || session.allowAlways.has(call.name) || session.ctx === undefined) {
+    return true;
+  }
   try {
     const res = await session.ctx.request("session/request_permission", {
       sessionId: session.id,
@@ -365,7 +375,18 @@ const app = agent({ name: "adcode-acp" })
         },
       ],
     });
-    return { sessionId: id, configOptions: configOptions(session) };
+    return {
+      sessionId: id,
+      modes: { currentModeId: session.mode, availableModes: AVAILABLE_MODES },
+      configOptions: configOptions(session),
+    };
+  })
+  .onRequest("session/set_mode", async ({ params }) => {
+    const session = sessions.get(params.sessionId);
+    if (session && (params.modeId === "ask" || params.modeId === "bypass")) {
+      session.mode = params.modeId;
+    }
+    return {};
   })
   .onRequest("session/set_config_option", async ({ params }) => {
     const session = sessions.get(params.sessionId);

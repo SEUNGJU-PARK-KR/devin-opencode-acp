@@ -25,6 +25,8 @@ Devin Desktop ──(ACP, stdio JSON-RPC)──> adcode-acp ──> @adcode/ai c
   context window의 80%를 넘기 전에 오래된 대화를 요약하고, HTTP 413이 오면 compact 후 재시도
 - **권한 승인** — `edit_file`/`propose_edit`/`move_file`/`delete_file`/`run_command` 실행 전
   `session/request_permission`(Allow/Always allow/Deny). 클라이언트 미지원 시 fail-open
+- **세션 모드** — `ask`/`bypass` 모드(`session/set_mode`). `bypass`면 권한 카드 없이 실행.
+  Devin `agentPreferences`에 `"adcode-acp": {"mode": "bypass"}`로 기본값 지정 가능
 - **`ask_user`** — `elicitation/create` 폼 카드로 질문 (최대 4개, 옵션은 드롭다운)
 - **`usage_update`** — 컨텍스트 사용량/윈도우 크기를 매 요청마다 전송
 - **`terminal_output`** — 명령 계열 툴 결과에 인라인 출력 메타데이터
@@ -120,5 +122,4 @@ ADCODE_ACP_MODEL=mock-model node dist/adcode-acp.mjs
 - `session/load` — 미지원 (loadSession: false). 지난 대화 재오픈 불가
 - `terminal/*` 클라이언트 메서드 — `run_command`는 로컬 spawn (클라이언트 터미널 미사용)
 - 멀티루트 workspace (`/add-dir` 계열) — 단일 root만 지원
-- 세션 모드 — ADCode 에이전트에 모드 개념이 없음
 - 팀 에이전트, 프로젝트 메모리 — 미연결
