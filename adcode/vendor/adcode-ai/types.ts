@@ -1,0 +1,292 @@
+/**
+ * Provider-neutral types for the AI layer. No logic.
+ *
+ * Brief §5.2: "an in-process agent loop with BYO API keys for Anthropic, OpenAI, Google,
+ * and a local endpoint (Ollama or compatible)... The provider is a runtime choice, not a
+ * build-time one." These types are the seam that makes that true - the agent loop knows
+ * only this vocabulary, and each provider adapter translates its own wire format into it.
+ */
+
+/**
+ * A provider's id.
+ *
+ * Open-ended on purpose. It used to be a union of four, which made the set of usable
+ * providers a build-time decision - and the catalogue has nearly two hundred, growing
+ * without this editor shipping again. The four named here are the ones with a first-class
+ * client; the template keeps them discoverable in an editor without closing the type.
+ */
+export type ProviderId = "anthropic" | "openai" | "google" | "ollama" | (string & {});
+
+export interface ModelChoice {
+  readonly provider: ProviderId;
+  readonly model: string;
+}
+
+/**
+ * How hard a reasoning model should think.
+ *
+ * Both vendors Priced the same way now: Anthropic's `effort` (on `output_config`)
+ * and OpenAI's `reasoning_effort` take low/medium/high up to max. Unset means
+ * Auto - the provider decides, and nothing extra is sent on the wire, so models
+ * that predate the parameter keep working exactly as before.
+ */
+export type Effort = "low" | "medium" | "high" | "max";
+
+/* ── Conversation ───────────────────────────────────────────────────────── */
+
+export type Role = "user" | "assistant";
+
+export interface TextBlock {
+  readonly type: "text";
+  readonly text: string;
+}
+
+/**
+ * One image attached to a user turn: a screenshot, a photo of a whiteboard, a
+ * mockup. Raw bytes as base64 - the adapters translate it to each provider's own
+ * image part, and anything that is not a user turn never carries one (tool calls
+ * and results stay text, which is what keeps traces readable and logs small).
+ */
+/**
+ * Image MIME types the assistant composer accepts. A closed set on purpose: every
+ * provider below types its own image part with these same literals, so an open
+ * string here would only move the rejection to the wire.
+ */
+export type ImageMediaType = "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+
+export interface ImageBlock {
+  readonly type: "image";
+  readonly mediaType: ImageMediaType;
+  /** Raw image bytes, base64-encoded. */
+  readonly data: string;
+}
+
+export interface ToolCallBlock {
+  readonly type: "tool-call";
+  readonly id: string;
+  readonly name: string;
+  readonly input: Record<string, unknown>;
+  /** Adapter validation failure. The agent returns it to the model without running the tool. */
+  readonly inputError?: string;
+  /**
+   * An opaque signature the provider requires back with this call - Gemini's thought
+   * signature. Gemini 3 refuses the next request with "Function call is missing a
+   * thought_signature" when it is dropped.
+   */
+  readonly signature?: string;
+  /**
+   * Reasoning the provider requires back with the message that made this call: OpenRouter's
+   * `reasoning_details`, DeepSeek's `reasoning_content`. Carried on the first call of the
+   * message, and sent only to the provider and model that produced it.
+   */
+  readonly reasoning?: ProviderReasoning;
+}
+
+/** Reasoning state one provider asked to be handed back verbatim. Never shown, never edited. */
+export interface ProviderReasoning {
+  readonly provider: string;
+  readonly model: string;
+  /** Plain reasoning text, where the provider streamed it as a string. */
+  readonly text?: string;
+  /** Structured reasoning items, exactly as the provider sent them. */
+  readonly details?: readonly unknown[];
+}
+
+export interface ToolResultBlock {
+  readonly type: "tool-result";
+  readonly toolCallId: string;
+  readonly content: string;
+  readonly isError: boolean;
+}
+
+export type ContentBlock = TextBlock | ImageBlock | ToolCallBlock | ToolResultBlock;
+
+export interface Message {
+  readonly role: Role;
+  readonly content: readonly ContentBlock[];
+}
+
+/* ── Tools ──────────────────────────────────────────────────────────────── */
+
+export interface ToolDefinition {
+  readonly name: string;
+  readonly description: string;
+  /** JSON Schema for the tool's arguments. */
+  readonly inputSchema: Record<string, unknown>;
+  /**
+   * Whether this tool changes anything the user would want to see first.
+   * §5.3: "Nothing is ever written to disk unseen" - a mutating tool's result goes
+   * through the inline diff widget rather than straight to the filesystem.
+   */
+  readonly mutating: boolean;
+  /**
+   * Safe to run at the same time as other concurrent calls from the same turn.
+   *
+   * Only pure reads qualify. When every call a model makes in one turn is concurrent the
+   * loop runs them together, so reading five files costs one file's latency.
+   */
+  readonly concurrent?: boolean;
+}
+
+/**
+ * What a tool hands back.
+ *
+ * `images` is for tools whose answer is a picture - a screenshot of the running app, an
+ * image file the model asked to look at. The agent loop places them after the turn's tool
+ * results, labelled, and keeps only the newest set in later requests: a screenshot is
+ * evidence for the next step, not something every following request should pay for.
+ */
+export interface ToolRunResult {
+  readonly content: string;
+  readonly isError: boolean;
+  readonly images?: readonly ImageBlock[];
+}
+
+export interface ToolRunner {
+  run(call: ToolCallBlock, signal: AbortSignal): Promise<ToolRunResult>;
+}
+
+/* ── Streaming ──────────────────────────────────────────────────────────── */
+
+/**
+ * What the agent emits as it works.
+ *
+ * §5.3's trace widget is the reason this is an event stream rather than a promise:
+ * "shows the agent's *workings*, live: which tool it called, which file it read, which
+ * command it ran, what it decided. This is what makes the AI legible instead of magical,
+ * and it is what a developer will judge the feature on."
+ */
+export type AgentEvent =
+  | { readonly kind: "text"; readonly text: string }
+  /** A summary of the model's reasoning, where the provider exposes one. */
+  | { readonly kind: "thinking"; readonly text: string }
+  /** Transient progress to show, never to keep: "waiting out a rate limit". */
+  | { readonly kind: "status"; readonly text: string }
+  | { readonly kind: "tool-call"; readonly call: ToolCallBlock }
+  /**
+   * Code a writing tool is producing, before its call is complete - for a live window, never
+   * recorded. `append` is what arrived since the previous draft of the same call and edit.
+   */
+  | {
+      readonly kind: "tool-draft";
+      readonly id: string;
+      readonly name: string;
+      readonly path: string | null;
+      readonly edit: number;
+      readonly append: string;
+    }
+  | {
+      readonly kind: "tool-result";
+      readonly toolCallId: string;
+      readonly name: string;
+      readonly content: string;
+      readonly isError: boolean;
+      /** Pictures the tool returned, so the conversation can show what the agent saw. */
+      readonly images?: readonly ImageBlock[];
+    }
+  | { readonly kind: "turn-end"; readonly reason: StopReason }
+  /** The provider declined. Not an error - a normal, reportable outcome. */
+  | { readonly kind: "refusal"; readonly detail: string }
+  /** §9: the AI layer degrades; it never throws into the editor. */
+  | { readonly kind: "error"; readonly detail: string }
+  | { readonly kind: "cancelled" }
+  /** The older part of the conversation is being summarised to make room. */
+  | { readonly kind: "compacting" }
+  /** The older part was replaced by `summary`; token counts are estimates. */
+  | {
+      readonly kind: "compacted";
+      readonly summary: string;
+      readonly before: number;
+      readonly after: number;
+      /** How many of the newest messages were kept word for word. */
+      readonly keptMessages: number;
+    }
+  /** How full the context is after a request - for a meter, never recorded. */
+  | { readonly kind: "context"; readonly tokens: number; readonly contextWindow: number }
+  /**
+   * What one request to the provider cost in tokens, for the usage totals - never recorded
+   * in the conversation. `estimated` when the provider did not say and the agent counted.
+   * `cachedTokens` is the part of `inputTokens` the provider read back from its prompt cache,
+   * present only when the provider reported it.
+   */
+  | {
+      readonly kind: "usage";
+      readonly inputTokens: number;
+      readonly outputTokens: number;
+      readonly cachedTokens?: number;
+      readonly estimated: boolean;
+    };
+
+export type StopReason = "end-turn" | "tool-use" | "max-tokens" | "refusal" | "cancelled";
+
+export interface ProviderRequest {
+  readonly model: string;
+  readonly system: string;
+  /**
+   * This request is one step of a conversation that will be sent again, longer, so its prefix
+   * is worth caching. One-off requests (a completion, a summary) leave it out: writing a cache
+   * entry costs a quarter more than plain input, repaid only when a later request reads it.
+   *
+   * `stableSystem` is how many leading characters of `system` read the same on every step:
+   * the instructions, ahead of the host context read fresh each round-trip (the cursor line,
+   * a preview that started). The system breakpoint goes there, so a changed context costs the
+   * history's cache but not the tools' and instructions'.
+   */
+  readonly cache?: { readonly stableSystem: number };
+  readonly messages: readonly Message[];
+  readonly tools: readonly ToolDefinition[];
+  readonly maxTokens: number;
+  /** Omitted (Auto) unless the user picked one in Connect a model. */
+  readonly effort?: Effort;
+}
+
+/** What a provider adapter yields. The agent loop turns these into `AgentEvent`s. */
+export type ProviderEvent =
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "thinking"; readonly text: string }
+  /** Host-side progress (the request scheduler waiting), passed through, never recorded. */
+  | { readonly kind: "status"; readonly text: string }
+  | { readonly kind: "tool-call"; readonly call: ToolCallBlock }
+  /** One streamed fragment of a call's JSON arguments, passed through as it arrives. */
+  | { readonly kind: "tool-input"; readonly index: number; readonly id: string; readonly name: string; readonly fragment: string }
+  /**
+   * The provider's own count for this request, when it reports one. At most once, before `stop`.
+   * `inputTokens` is everything the request carried; `cachedTokens` the part of it read from cache.
+   */
+  | { readonly kind: "usage"; readonly inputTokens: number; readonly outputTokens: number; readonly cachedTokens?: number }
+  | { readonly kind: "stop"; readonly reason: StopReason; readonly detail?: string };
+
+export interface Provider {
+  readonly id: ProviderId;
+  readonly displayName: string;
+  /** Models this provider offers, most capable first. */
+  readonly models: readonly string[];
+  stream(request: ProviderRequest, signal: AbortSignal): AsyncIterable<ProviderEvent>;
+}
+
+/**
+ * What the catalogue knows about a model that changes how it has to be asked.
+ *
+ * A model's reasoning levels and output ceiling are facts about that model, not about the
+ * provider, and sending a level a model does not have is a 400 - so adapters look these up
+ * per request instead of assuming one shape per vendor.
+ */
+export interface ModelTraits {
+  /** The model reasons before answering. */
+  readonly reasoning?: boolean;
+  /** The reasoning-effort levels it accepts, in its own words ("minimal", "xhigh"...). */
+  readonly effortLevels?: readonly string[] | null;
+  /** The most output tokens one response may contain. */
+  readonly maxOutput?: number | null;
+}
+
+/** A model's traits, or undefined when the catalogue does not know the model. */
+export type TraitsLookup = (model: string) => ModelTraits | undefined;
+
+/** Where a provider's key comes from. Never settings JSON (§5.2). */
+export interface KeyStore {
+  get(provider: ProviderId): Promise<string | null>;
+  set(provider: ProviderId, key: string): Promise<void>;
+  clear(provider: ProviderId): Promise<void>;
+  has(provider: ProviderId): Promise<boolean>;
+}

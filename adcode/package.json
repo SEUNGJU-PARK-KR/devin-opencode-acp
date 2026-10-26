@@ -1,0 +1,25 @@
+{
+  "name": "adcode-acp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ACP (Agent Client Protocol) adapter that exposes ADCode's assistant as an agent selectable in ACP clients such as Devin Desktop.",
+  "type": "module",
+  "bin": {
+    "adcode-acp": "dist/adcode-acp.mjs"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^2.0.2",
+    "picomatch": "^4.0.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}
