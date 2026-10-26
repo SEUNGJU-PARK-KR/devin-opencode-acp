@@ -37,6 +37,7 @@ if [ "$WINDOWS" = "1" ]; then
   {
     echo "process.env.ADCODE_ACP_PROVIDER ??= \"tagflow\";"
     [ -n "$IDENTITY_FILE" ] && echo "process.env.ADCODE_IDENTITY_FILE ??= \"$(echo "$IDENTITY_FILE" | sed 's/\\/\//g')\";"
+    echo "process.env.ADCODE_ACP_MAX_TURNS ??= \"${ADCODE_ACP_MAX_TURNS:-100}\";"
     echo "await import(new URL(\"./dist/adcode-acp.mjs\", import.meta.url));"
   } > "$WRAPPER"
 else

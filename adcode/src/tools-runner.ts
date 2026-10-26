@@ -76,6 +76,9 @@ export class HeadlessToolRunner implements ToolRunner {
   onAsk?: (input: Record<string, unknown>) => Promise<ToolRunResult>;
 
   private readonly root: string;
+  /** Oversized tool output goes here instead of the conversation; read_file reaches it. */
+  private readonly spillDir: string;
+  private spillSeq = 0;
 
   constructor(root: string) {
     let r = root.trim();
@@ -85,6 +88,8 @@ export class HeadlessToolRunner implements ToolRunner {
       } catch {}
     }
     this.root = resolve(r);
+    this.spillDir = join(this.root, ".adcode", "spill");
+    void rm(this.spillDir, { recursive: true, force: true }).catch(() => {});
   }
 
   private resolve(wsPath: unknown): string {
@@ -115,7 +120,31 @@ export class HeadlessToolRunner implements ToolRunner {
     "run_command",
   ]);
 
+  private static readonly SPILL_CHARS = 8_000;
+  private static readonly SPILL_PREVIEW = 3_000;
+
+  /** Result bigger than the in-context budget lands on disk; the model gets a preview. */
+  private async spill(result: ToolRunResult): Promise<ToolRunResult> {
+    if (result.content.length <= HeadlessToolRunner.SPILL_CHARS) return result;
+    try {
+      await mkdir(this.spillDir, { recursive: true });
+      const file = join(this.spillDir, `output-${++this.spillSeq}.txt`);
+      await writeFile(file, result.content, "utf8");
+      const kept = result.content.slice(0, HeadlessToolRunner.SPILL_PREVIEW);
+      return {
+        ...result,
+        content: `${kept}\n[... ${result.content.length - HeadlessToolRunner.SPILL_PREVIEW} more characters - the full output was saved to ${rel(this.root, file)}. read_file it with offset and limit for the rest.]`,
+      };
+    } catch {
+      return result;
+    }
+  }
+
   async run(call: ToolCallBlock, signal: AbortSignal): Promise<ToolRunResult> {
+    return this.spill(await this.dispatch(call, signal));
+  }
+
+  private async dispatch(call: ToolCallBlock, signal: AbortSignal): Promise<ToolRunResult> {
     const input = call.input ?? {};
     try {
       if (

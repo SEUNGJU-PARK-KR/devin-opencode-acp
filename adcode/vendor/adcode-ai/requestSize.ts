@@ -62,6 +62,47 @@ export function leanTools(tools: readonly ToolDefinition[]): ToolDefinition[] {
   return tools.filter((tool) => LEAN_TOOL_NAMES.has(tool.name));
 }
 
+/** Tool results kept whole at the tail of a masked request; older ones are clipped. */
+export const MASK_RECENT_RESULTS = 3;
+
+/**
+ * The history with old tool output replaced once a request passes a size floor.
+ *
+ * This is the same idea as leanHistory but applied routinely instead of only after a
+ * refusal: the newest results stay whole and older ones - a file read ten turns back,
+ * a listing the model has long acted on - shrink to a head plus a re-read note. The
+ * real history is never touched, so compact() still sees everything; masking only
+ * shapes what this request sends. Mirrors what other agents call observation masking
+ * or tool-result clearing (SWE-agent's LastNObservations, Anthropic's context editing).
+ */
+export function maskHistory(messages: readonly Message[], keep = LEAN_RESULT_CHARS, keepRecent = MASK_RECENT_RESULTS): Message[] {
+  let seen = 0;
+  const out = new Array<Message>(messages.length);
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!;
+    if (!message.content.some((block) => block.type === "tool-result")) {
+      out[index] = message;
+      continue;
+    }
+    const resultCount = message.content.filter((block) => block.type === "tool-result").length;
+    const wholeHere = Math.max(0, keepRecent - seen);
+    const cutoff = resultCount - wholeHere;
+    seen += resultCount;
+    let pos = 0;
+    out[index] = {
+      ...message,
+      content: message.content.map((block) => {
+        if (block.type !== "tool-result") return block;
+        const fresh = ++pos > cutoff;
+        return !fresh && block.content.length > keep
+          ? { ...block, content: `${block.content.slice(0, keep)}\n[Trimmed to keep the request small - call the tool again if you need the rest.]` }
+          : block;
+      }),
+    };
+  }
+  return out;
+}
+
 /**
  * The history with old tool output trimmed.
  *

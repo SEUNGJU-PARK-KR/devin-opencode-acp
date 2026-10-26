@@ -25,7 +25,7 @@ import type {
   ToolRunResult,
   ContentBlock,
 } from "./types.ts";
-import { isRequestTooLarge, LEAN_SYSTEM, leanHistory, leanTools } from "./requestSize.ts";
+import { isRequestTooLarge, LEAN_SYSTEM, leanHistory, leanTools, maskHistory } from "./requestSize.ts";
 import { createToolDraftReader, type ToolDraftReader } from "./toolDraft.ts";
 import {
   compactedHistory,
@@ -376,6 +376,8 @@ export function createAgent(deps: AgentDeps): Agent {
     deps.tools.filter((tool) => tool.concurrent === true && !tool.mutating).map((tool) => tool.name),
   );
   let controller: AbortController | null = null;
+  /** Signature -> output for calls already run this conversation; identical repeats answer short. */
+  const seenResults = new Map<string, string>();
   /** Set once a provider refuses a request for its size; cleared with the conversation. */
   let shrunk = false;
   /** Set once a provider refuses an image; pictures tools return are then described, not sent. */
@@ -487,11 +489,19 @@ export function createAgent(deps: AgentDeps): Agent {
           }
         }
 
+        // Mask old tool output once the request is past a modest share of the window,
+        // long before compaction's own threshold - older results are almost always
+        // re-fetchable, so they stop paying rent on every round-trip.
+        const masked =
+          compaction !== undefined &&
+          estimateTokens(system, messages, tools) >=
+            Math.floor(inputBudget(compaction.contextWindow(), maxOutput) * 0.45);
+
         const request: ProviderRequest = {
           model: deps.model,
           system,
           cache: { stableSystem: instructions.length },
-          messages: lean ? leanHistory(messages) : messages,
+          messages: lean ? leanHistory(messages) : masked ? maskHistory(messages) : messages,
           tools,
           maxTokens: budget,
           ...(deps.effort === undefined ? {} : { effort: deps.effort }),
@@ -687,7 +697,7 @@ export function createAgent(deps: AgentDeps): Agent {
         // Three identical failures indicate no progress. Avoid spending an entire
         // turn budget on retries, or repeating external operations indefinitely.
         const signature = JSON.stringify([call.name, call.input]);
-        const result = early !== null
+        let result = early !== null
           ? early[index]!
           : repeatedFailure === null
             ? await runTool(call, signal)
@@ -712,6 +722,13 @@ export function createAgent(deps: AgentDeps): Agent {
         } else {
           failures.delete(signature);
           invalidCalls = 0;
+        }
+        // An identical call returning identical output has already paid for itself once;
+        // the repeat gets a pointer instead of a copy.
+        if (seenResults.get(signature) === result.content && result.content.length > 500) {
+          result = { ...result, content: `[Identical output to the earlier ${call.name} call with the same input - not repeated here. Refer to that result.]` };
+        } else {
+          seenResults.set(signature, result.content);
         }
         const images = (result.images ?? []).slice(0, MAX_TOOL_IMAGES);
         results.push({
