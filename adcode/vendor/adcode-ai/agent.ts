@@ -56,7 +56,10 @@ export interface AgentCompaction {
  * A model that keeps calling tools would otherwise loop until the user's key ran out of
  * credit. The bound is generous enough for real multi-step work and finite regardless.
  */
-export const MAX_TURNS = 50;
+export const MAX_TURNS = Math.max(
+  10,
+  Number(process.env.ADCODE_ACP_MAX_TURNS ?? 50) || 50,
+);
 
 /**
  * The output allowance a request starts with.

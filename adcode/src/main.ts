@@ -198,6 +198,14 @@ const configOptions = (session: Session): SessionConfigOption[] => [
     currentValue: session.model,
     options: config.models.map((m) => ({ value: m.id, name: m.label ?? m.id })),
   },
+  {
+    id: "bypass_permissions",
+    name: "Bypass permissions",
+    description: "Run edit/command tools without asking",
+    category: "mode",
+    type: "boolean",
+    currentValue: session.mode === "bypass",
+  },
 ];
 
 function emitUpdate(ctx: AgentContext, sessionId: string, update: SessionUpdate): void {
@@ -381,16 +389,21 @@ const app = agent({ name: "adcode-acp" })
       configOptions: configOptions(session),
     };
   })
-  .onRequest("session/set_mode", async ({ params }) => {
+  .onRequest("session/set_mode", async ({ params, client }) => {
     const session = sessions.get(params.sessionId);
     if (session && (params.modeId === "ask" || params.modeId === "bypass")) {
       session.mode = params.modeId;
+      emitUpdate(client, params.sessionId, {
+        sessionUpdate: "config_option_update",
+        configOptions: configOptions(session),
+      });
     }
     return {};
   })
-  .onRequest("session/set_config_option", async ({ params }) => {
+  .onRequest("session/set_config_option", async ({ params, client }) => {
     const session = sessions.get(params.sessionId);
     if (!session) return { configOptions: [] };
+    session.ctx = client;
     if (
       params.configId === "model" &&
       typeof params.value === "string" &&
@@ -398,6 +411,12 @@ const app = agent({ name: "adcode-acp" })
     ) {
       session.model = params.value;
       session.agent = makeAgent(session.cwd, params.value, session.runner, session.agent.history());
+    } else if (params.configId === "bypass_permissions" && typeof params.value === "boolean") {
+      session.mode = params.value ? "bypass" : "ask";
+      emitUpdate(client, params.sessionId, {
+        sessionUpdate: "current_mode_update",
+        currentModeId: session.mode,
+      });
     }
     return { configOptions: configOptions(session) };
   })
