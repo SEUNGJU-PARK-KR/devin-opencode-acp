@@ -35,6 +35,16 @@ func main() {
 	dir := filepath.Dir(self)
 
 	real := os.Getenv("OPENCODE_REAL")
+	if real != "" {
+		// Guard against a stale OPENCODE_REAL that points back at this proxy:
+		// spawning ourselves would recurse until the machine runs out of handles.
+		if rp, err := filepath.Abs(real); err == nil {
+			if sp, serr := filepath.Abs(self); serr == nil && strings.EqualFold(rp, sp) {
+				fmt.Fprintln(os.Stderr, "proxy: OPENCODE_REAL points at the proxy itself; ignoring it")
+				real = ""
+			}
+		}
+	}
 	if real == "" {
 		for _, c := range []string{
 			filepath.Join(dir, "node_modules", "opencode-ai", "bin", "opencode.exe"),

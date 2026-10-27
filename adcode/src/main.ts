@@ -174,7 +174,7 @@ async function askUser(session: Session, input: Record<string, unknown>): Promis
     if (res.action !== "accept") {
       return { content: `User ${res.action === "decline" ? "declined" : "cancelled"} the question(s).`, isError: true };
     }
-    const content = res.content ?? {};
+    const content = (res.content ?? {}) as Record<string, unknown>;
     return {
       content: questions
         .map((q, i) => `Q: ${String(q.question ?? "")}\nA: ${String(content[`q${i}`] ?? "")}`)

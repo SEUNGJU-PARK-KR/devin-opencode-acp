@@ -1,0 +1,34 @@
+{
+  "$comment": "Models FreeLLMAPI exposes to OpenCode through the ACP agent. Order = failover preference. 'match' patterns resolve the real /v1/models id on the running FreeLLMAPI instance; 'modelID' is the fallback when the instance is not reachable.",
+  "providerId": "freellmapi",
+  "providerName": "FreeLLMAPI",
+  "baseURL": "http://127.0.0.1:3001/v1",
+  "defaultModelId": "qwen38max",
+  "models": [
+    {
+      "id": "qwen38max",
+      "modelID": "qwen/qwen3.8-max:free",
+      "name": "Qwen3.8 Max (xKiro)",
+      "match": ["qwen3.8-max"],
+      "context": 1000000,
+      "output": 32768
+    },
+    {
+      "id": "glm53",
+      "modelID": "glm-5.3:free",
+      "name": "GLM-5.3 (UnoRouter)",
+      "match": ["glm-5.3"],
+      "exclude": ["flash"],
+      "context": 1000000,
+      "output": 32768
+    },
+    {
+      "id": "qwen3827b",
+      "modelID": "Qwen3.8-27B",
+      "name": "Qwen3.8 27B (OVH)",
+      "match": ["qwen3.8-27b"],
+      "context": 262144,
+      "output": 16384
+    }
+  ]
+}

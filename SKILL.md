@@ -31,25 +31,58 @@ Devin sends `resource_link` blocks whose URIs look like `file:///C:/dir/file.ts`
 
 | Agent | Symptom |
 |---|---|
-| opencode | `fileURLToPath` throws `ERR_INVALID_FILE_URL_PATH` → whole prompt fails with `-32603 Internal error` |
+| opencode 1.x | `fileURLToPath` throws `ERR_INVALID_FILE_URL_PATH` → whole prompt fails with `-32603 Internal error` |
+| opencode 2.x | no error — the attachment is **silently dropped**, the model only sees `[name](file:///C%3A%5C...)` (verified on 2.0.30) |
 | CodeBuddy | URI collapses to basename → `Read file.ts` relative to cwd → `File does not exist` |
 
-Plain prompts work; only prompts with file chips fail. Upgrading does not help (reproduced 1.18.35 → 1.19.3).
+Plain prompts work; only prompts with file chips fail. Upgrading from 1.x to 2.x changes the symptom but not the outcome.
 
 **Fix:** inside `file://` spans on stdin, rewrite `%5C`/`%2F` → `/`, `%3A` → `:`; pass every other byte through unchanged.
 
 ## OpenCode setup
 
 ```powershell
-npm i -g opencode-ai@<ver>
-cd proxy; go build -o opencode-proxy.exe .
-copy opencode-proxy.exe "$env:APPDATA\npm\opencode.exe"
-# Proxy resolves the real binary from node_modules\opencode-ai\bin\opencode.exe,
-# or OPENCODE_REAL=<path>, or opencode-real.exe beside it.
+.\scripts\install.ps1                  # installs if missing, proxy, registry, Devin setting
+.\scripts\install.ps1 -Freellmapi      # ...and add the three FreeLLMAPI models
 ```
 
+The installer renames the real binary to `opencode-real.exe` and puts the proxy at `opencode.exe`.
+That is the only layout that works for both install shapes:
+
+| Layout | Real binary | Proxy finds it via |
+| --- | --- | --- |
+| V2 standalone | `%APPDATA%\npm\opencode.exe` (≈200 MB) | `opencode-real.exe` beside the proxy |
+| npm package | `node_modules\opencode-ai\bin\opencode.exe` | the package path |
+
+Earlier revisions copied the proxy over `opencode.exe` without a backup, which left a V2
+install with a proxy that had nothing to forward to. The proxy now also refuses an
+`OPENCODE_REAL` that points at itself (that combination recursed).
+
 Registry entry is just `cmd: "opencode.exe"`, `args: ["acp"]` — `archive` is ignored.
-Auto-approve: `"permission": { "*": "allow" }` in `%USERPROFILE%\.config\opencode\opencode.jsonc`, then respawn.
+Approvals: V2 defaults already allow every action (`{ "action": "*", "resource": "*", "effect": "allow" }`),
+so no rule is needed. The V1 key `"permission": { "*": "allow" }` is ignored by V2 — use
+`"permissions": [{ "action": "shell", "resource": "*", "effect": "allow" }]` if you want it explicit.
+
+## FreeLLMAPI models
+
+```powershell
+.\scripts\setup-freellmapi.ps1 -FreeLLMApiUrl http://127.0.0.1:3001/v1 [-ApiKey freel-xxxx]
+```
+
+Adds a `freellmapi` provider to `~/.config/opencode/opencode.jsonc` with three aliases —
+`qwen38max` (Qwen3.8 Max / xKiro), `glm53` (GLM-5.3 / UnoRouter), `qwen3827b`
+(Qwen3.8 27B / OVH) — each on a different platform, so one provider's 429 does not take
+the rest down. Ids are resolved from the live instance and fall back to
+`config/freellmapi.json`. Devin shows them as `freellmapi/<alias>` in `/models`.
+
+`scripts/verify-acp.mjs` proves the chain without touching the network: it starts a mock
+OpenAI upstream in a temp project, drives `initialize → session/new → set_config_option →
+session/prompt`, and checks the model list plus a `%5C` attachment. Run it after any
+OpenCode upgrade:
+
+```powershell
+node scripts\verify-acp.mjs --proxy "$env:APPDATA\npm\opencode.exe" --opencode "$env:APPDATA\npm\opencode-real.exe"
+```
 
 ## CodeBuddy setup
 
@@ -75,11 +108,15 @@ Selecting a model in Devin reverts to Auto on `session/load` because CodeBuddy p
 - `%APPDATA%\Devin\logs\<ts>\window1\exthost\codeium.windsurf\Devin ACP.log` — expect `found in PATH` → `Spawning process` → `Initialization complete`.
 - `...\output_logging_*\*-Devin ACP <agent>.log` — agent stderr / JSON-RPC errors.
 - opencode: `~/.local/share/opencode/log/opencode.log`; CodeBuddy: `~/.codebuddy/logs/<date>/<workspace>__<hash>.log`.
-- Repro harness: pipe `initialize` → `session/new` → `session/prompt` (with one `resource_link`) into `<agent> acp`.
+- `node scripts/verify-acp.mjs` — initialize → session/new → session/prompt against a mock upstream.
 - `OPENCODE_PROXY_LOG` / `CODEBUDDY_PROXY_LOG` tee the JSON-RPC stream.
+
+A one-off `-32603 Internal error: Internal service failure` (`ServiceUnavailableError`) on
+`session/new` right after an upgrade is the shared background service restarting — retry, or
+`opencode service restart`.
 
 ## Files
 
-`proxy/main.go` · `codebuddy/bin-wrapper.js` · `proxy-codebuddy/main.go` · `scripts/install.ps1` · `scripts/install-codebuddy.ps1`
+`proxy/main.go` · `codebuddy/bin-wrapper.js` · `proxy-codebuddy/main.go` · `scripts/install.ps1` · `scripts/install-codebuddy.ps1` · `scripts/setup-freellmapi.ps1` · `scripts/verify-acp.mjs` · `scripts/lib/acp-common.ps1` · `config/freellmapi.json`
 
 > Full long-form version: commit `af11e9f`.
