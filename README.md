@@ -26,6 +26,8 @@ See **[SKILL.md](SKILL.md)** for the full guide. Quick paths: `scripts/install.p
 - `scripts/lib/acp-common.ps1` — shared installer helpers (binary discovery, safe proxy
   deploy, registry + Devin settings merge)
 - `config/freellmapi.json` — the three models, their aliases, limits, and id-match patterns
+- `freellmapi/ACP-FLM-001.md` — technical report (aviation-document format): ACP limits,
+  model baseline, defects/corrective actions, verification, operating procedures
 - `adcode/` — standalone ACP adapter wrapping ADCode's assistant (`@adcode/ai` vendored):
   model dropdown, `/compact`, permission prompts, `ask_user` elicitation, tagflow free
   models via ADCode sign-in. `cd adcode && ./install.sh --tagflow`
